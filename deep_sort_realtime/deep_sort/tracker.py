@@ -2,11 +2,13 @@
 from __future__ import absolute_import
 from datetime import datetime
 import numpy as np
+import logging
 from . import kalman_filter
 from . import linear_assignment
 from . import iou_matching
 from .track import Track
 
+logger = logging.getLogger(__name__)
 
 class Tracker:
     """
@@ -110,6 +112,16 @@ class Tracker:
                 new_tracks.append(t)
             else:
                 self.del_tracks_ids.append(t.track_id)
+                # Log track removal (we already logged the reason in mark_missed)
+                logger.info(f"Removing track {t.track_id} from active tracks list")
+                
+        # Log track count statistics
+        logger.info(
+            f"Track statistics: {len(new_tracks)} active, {len(self.del_tracks_ids)} deleted, "
+            f"{len([t for t in new_tracks if t.is_confirmed()])} confirmed, "
+            f"{len([t for t in new_tracks if t.is_tentative()])} tentative"
+        )
+                
         self.tracks = new_tracks
         # self.tracks = [t for t in self.tracks if not t.is_deleted()]
 
@@ -190,6 +202,14 @@ class Tracker:
             track_id = "{}_{}".format(self.today, self._next_id)
         else:
             track_id = "{}".format(self._next_id)
+            
+        # Log new track creation
+        logger.info(
+            f"Creating new track {track_id}: confidence={detection.confidence:.3f}, "
+            f"class={detection.class_name}, position={detection.get_ltwh()}, "
+            f"requires {self.n_init} detections to confirm"
+        )
+        
         self.tracks.append(
             self.track_class(
                 mean,

@@ -334,3 +334,64 @@ class DeepSort(object):
 
     def delete_all_tracks(self):
         self.tracker.delete_all_tracks()
+        
+    def enable_detailed_track_logging(self, log_level=logging.INFO):
+        """
+        Enable detailed logging for track lifecycle events (creation, updates, misses, deletions).
+        
+        Parameters
+        ----------
+        log_level : int
+            Logging level (e.g., logging.INFO, logging.DEBUG, etc.)
+        """
+        # Configure the loggers for detailed tracking
+        tracking_logger = logging.getLogger("deep_sort_realtime.deep_sort.track")
+        tracking_logger.setLevel(log_level)
+        
+        tracker_logger = logging.getLogger("deep_sort_realtime.deep_sort.tracker")
+        tracker_logger.setLevel(log_level)
+        
+        # If no handlers are configured, add a basic console handler
+        if not tracking_logger.handlers and not tracker_logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(log_level)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            console_handler.setFormatter(formatter)
+            
+            tracking_logger.addHandler(console_handler)
+            tracker_logger.addHandler(console_handler)
+            
+        logger.info("Detailed track lifecycle logging enabled")
+        
+    def enable_gsi_tracking(self, position_history_size=30, gsi_sigma=2.0, interpolation_max_frames=5):
+        """
+        Enable Gaussian-smoothed Interpolation (GSI) for tracking.
+        This improves trajectory predictions during occlusions by using position history
+        and Gaussian weighting.
+        
+        Parameters
+        ----------
+        position_history_size : int
+            Maximum number of positions to keep in history for interpolation
+        gsi_sigma : float
+            Sigma parameter for Gaussian weighting (controls smoothness)
+        interpolation_max_frames : int
+            Maximum number of frames to perform interpolation before falling back to KF
+        """
+        from deep_sort_realtime.deep_sort.track import GSITrack
+        
+        # Create a custom track class factory that will initialize GSITrack with the parameters
+        def create_gsi_track(*args, **kwargs):
+            kwargs.update({
+                'position_history_size': position_history_size,
+                'gsi_sigma': gsi_sigma,
+                'interpolation_max_frames': interpolation_max_frames
+            })
+            return GSITrack(*args, **kwargs)
+        
+        # Update tracker to use GSI track class
+        self.tracker.track_class = create_gsi_track
+        
+        logger.info(f"GSI tracking enabled with sigma={gsi_sigma}, "
+                   f"history size={position_history_size}, "
+                   f"max interpolation frames={interpolation_max_frames}")

@@ -1,4 +1,9 @@
 # vim: expandtab:ts=4:sw=4
+import logging
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
 class TrackState:
     """
     Enumeration type for the single target track state. Newly created tracks are
@@ -256,8 +261,15 @@ class Track:
         self.features.append(detection.feature)
         self.persistent_features.append(detection.feature)  # Add to persistent features
         
+        # Log track update with detection information
+        logger.info(
+            f"Track {self.track_id} updated: confidence={detection.confidence:.3f}, "
+            f"class={detection.class_name}, position={self.original_ltwh}, "
+            f"features_count={len(self.persistent_features)}"
+        )
+        
         # Limit the number of persistent features to prevent memory issues
-        max_persistent_features = 100  # Configurable maximum
+        max_persistent_features = 1000  # Configurable maximum
         if len(self.persistent_features) > max_persistent_features:
             # Keep the most recent features
             self.persistent_features = self.persistent_features[-max_persistent_features:]
@@ -276,10 +288,26 @@ class Track:
 
     def mark_missed(self):
         """Mark this track as missed (no association at the current time step)."""
+        previous_state = self.state
+        
         if self.state == TrackState.Tentative:
             self.state = TrackState.Deleted
+            logger.info(
+                f"Track {self.track_id} deleted: Failed to confirm within initialization phase "
+                f"(hits={self.hits}, required={self._n_init})"
+            )
         elif self.time_since_update > self._max_age:
             self.state = TrackState.Deleted
+            logger.info(
+                f"Track {self.track_id} deleted: Exceeded maximum age "
+                f"(time_since_update={self.time_since_update}, max_age={self._max_age})"
+            )
+        else:
+            # Track is just missed but not deleted
+            logger.info(
+                f"Track {self.track_id} missed detection: age={self.age}, "
+                f"hits={self.hits}, time_since_update={self.time_since_update}"
+            )
 
     def is_tentative(self):
         """Returns True if this track is tentative (unconfirmed)."""
@@ -292,3 +320,176 @@ class Track:
     def is_deleted(self):
         """Returns True if this track is dead and should be deleted."""
         return self.state == TrackState.Deleted
+
+
+class GSITrack(Track):
+    """
+    Extension of the Track class that implements Gaussian-smoothed Interpolation (GSI)
+    for improved trajectory prediction during occlusions.
+    
+    This implementation maintains a history of positions and can generate interpolated
+    positions when the track is temporarily lost, using Gaussian weighting to smooth
+    the predictions.
+    """
+    
+    def __init__(
+        self,
+        mean,
+        covariance,
+        track_id,
+        n_init,
+        max_age,
+        feature=None,
+        original_ltwh=None,
+        det_class=None,
+        det_conf=None,
+        instance_mask=None,
+        others=None,
+        position_history_size=30,
+        gsi_sigma=2.0,
+        interpolation_max_frames=5
+    ):
+        """
+        Parameters
+        ----------
+        position_history_size : int
+            Maximum number of positions to keep in history for interpolation
+        gsi_sigma : float
+            Sigma parameter for Gaussian weighting (controls smoothness)
+        interpolation_max_frames : int
+            Maximum number of frames to perform interpolation before falling back to KF
+        
+        Additional parameters are the same as in the Track class.
+        """
+        super().__init__(
+            mean, covariance, track_id, n_init, max_age, 
+            feature, original_ltwh, det_class, det_conf, instance_mask, others
+        )
+        
+        # GSI specific parameters
+        self.position_history = []  # List of (frame_idx, position) tuples
+        self.position_history_size = position_history_size
+        self.gsi_sigma = gsi_sigma
+        self.interpolation_max_frames = interpolation_max_frames
+        self.frame_idx = 0
+        self.last_detection_frame = 0
+        self.is_interpolating = False
+    
+    def predict(self, kf):
+        """
+        Override predict method to use GSI when appropriate.
+        """
+        self.frame_idx += 1
+        
+        # Determine if we should use interpolation
+        frames_since_detection = self.frame_idx - self.last_detection_frame
+        if (self.time_since_update > 0 and 
+            self.time_since_update <= self.interpolation_max_frames and
+            len(self.position_history) >= 3):
+            
+            # Use GSI for prediction
+            self.is_interpolating = True
+            interpolated_position = self._interpolate_position()
+            
+            # Update mean with interpolated position, but keep covariance from KF prediction
+            mean, covariance = kf.predict(self.mean, self.covariance)
+            
+            # Only replace the position part (x, y) of the state
+            mean[0] = interpolated_position[0]  # x
+            mean[1] = interpolated_position[1]  # y
+            
+            self.mean, self.covariance = mean, covariance
+            
+            logger.info(
+                f"Track {self.track_id} using GSI interpolation: frame {self.frame_idx}, "
+                f"frames since detection: {frames_since_detection}"
+            )
+        else:
+            # Use regular Kalman prediction
+            self.is_interpolating = False
+            self.mean, self.covariance = kf.predict(self.mean, self.covariance)
+        
+        self.age += 1
+        self.time_since_update += 1
+        self.original_ltwh = None
+        self.det_conf = None
+        self.instance_mask = None
+        self.others = None
+    
+    def update(self, kf, detection):
+        """
+        Override update method to record position history for interpolation.
+        """
+        # Call the parent update method first
+        super().update(kf, detection)
+        
+        # Update position history
+        position = (self.mean[0], self.mean[1])  # x, y
+        self.position_history.append((self.frame_idx, position))
+        
+        # Limit history size
+        if len(self.position_history) > self.position_history_size:
+            self.position_history = self.position_history[-self.position_history_size:]
+        
+        self.last_detection_frame = self.frame_idx
+        self.is_interpolating = False
+        
+        logger.info(
+            f"Track {self.track_id} position history updated: {len(self.position_history)} points"
+        )
+    
+    def _gaussian_weight(self, distance, sigma):
+        """
+        Calculate Gaussian weight based on distance.
+        
+        Parameters
+        ----------
+        distance : float
+            Distance value (typically time difference)
+        sigma : float
+            Sigma parameter controlling the spread of the Gaussian
+            
+        Returns
+        -------
+        float
+            Gaussian weight value
+        """
+        return np.exp(-(distance ** 2) / (2 * sigma ** 2))
+    
+    def _interpolate_position(self):
+        """
+        Perform Gaussian-smoothed interpolation based on position history.
+        
+        Returns
+        -------
+        tuple
+            Interpolated (x, y) position
+        """
+        if not self.position_history:
+            # Fallback to current position if no history
+            return (self.mean[0], self.mean[1])
+        
+        # Sort history by frame index
+        sorted_history = sorted(self.position_history, key=lambda x: x[0])
+        
+        # Extract times and positions
+        times = np.array([h[0] for h in sorted_history])
+        positions = np.array([h[1] for h in sorted_history])
+        
+        # Current time for interpolation
+        current_time = self.frame_idx
+        
+        # Calculate time differences
+        time_diffs = np.abs(times - current_time)
+        
+        # Calculate weights using Gaussian function
+        weights = np.array([self._gaussian_weight(diff, self.gsi_sigma) for diff in time_diffs])
+        
+        # Normalize weights
+        weights = weights / np.sum(weights)
+        
+        # Calculate weighted position
+        interpolated_x = np.sum(weights * positions[:, 0])
+        interpolated_y = np.sum(weights * positions[:, 1])
+        
+        return (interpolated_x, interpolated_y)
