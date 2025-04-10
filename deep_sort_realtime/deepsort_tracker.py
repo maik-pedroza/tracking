@@ -44,6 +44,7 @@ class DeepSort(object):
         embedder_wts=None,
         polygon=False,
         today=None,
+        appearance_weight=1.0,
     ):
         """
 
@@ -83,6 +84,9 @@ class DeepSort(object):
             Whether detections are polygons (e.g. oriented bounding boxes)
         today: Optional[datetime.date]
             Provide today's date, for naming of tracks. Argument for deep_sort_realtime.deep_sort.tracker.Tracker.
+        appearance_weight: Optional[float] = 1.0
+            Weight factor to increase the importance of appearance features (embeddings) during tracking.
+            Values greater than 1.0 give more weight to appearance similarity compared to spatial proximity.
         """
         self.nms_max_overlap = nms_max_overlap
         metric = nn_matching.NearestNeighborDistanceMetric(
@@ -96,6 +100,7 @@ class DeepSort(object):
             override_track_class=override_track_class,
             today=today,
             gating_only_position=gating_only_position,
+            appearance_weight=appearance_weight,
         )
 
         if embedder is not None:
