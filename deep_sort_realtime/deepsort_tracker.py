@@ -21,6 +21,7 @@ EMBEDDER_CHOICES = [
     "clip_RN50x16",
     "clip_ViT-B/32",
     "clip_ViT-B/16",
+    "clip_ViT-L/14",
 ]
 
 
@@ -67,7 +68,7 @@ class DeepSort(object):
             Giving this will override default Track class, this must inherit Track. Argument for deep_sort_realtime.deep_sort.tracker.Tracker.
         embedder : Optional[str] = 'mobilenet'
             Whether to use in-built embedder or not. If None, then embeddings must be given during update.
-            Choice of ['mobilenet', 'torchreid', 'clip_RN50', 'clip_RN101', 'clip_RN50x4', 'clip_RN50x16', 'clip_ViT-B/32', 'clip_ViT-B/16']
+            Choice of ['mobilenet', 'torchreid', 'clip_RN50', 'clip_RN101', 'clip_RN50x4', 'clip_RN50x16', 'clip_ViT-B/32', 'clip_ViT-B/16', 'clip_ViT-L/14']
         half : Optional[bool] = True
             Whether to use half precision for deep embedder (applicable for mobilenet only)
         bgr : Optional[bool] = True
@@ -128,12 +129,21 @@ class DeepSort(object):
                 )
 
                 model_name = "_".join(embedder.split("_")[1:])
+                
+                # Configuración especial para ViT-L/14
+                custom_resolution = None
+                if model_name == "ViT-L/14":
+                    # Usar resolución más alta para vehículos (384x384)
+                    custom_resolution = 384
+                    print(f"Using enhanced resolution {custom_resolution}x{custom_resolution} for {model_name}")
+                
                 self.embedder = Embedder(
                     model_name=model_name,
                     model_wts_path=embedder_wts,
                     max_batch_size=16,
                     bgr=bgr,
                     gpu=embedder_gpu,
+                    custom_input_resolution=custom_resolution
                 )
 
         else:
@@ -391,7 +401,3 @@ class DeepSort(object):
         
         # Update tracker to use GSI track class
         self.tracker.track_class = create_gsi_track
-        
-        logger.info(f"GSI tracking enabled with sigma={gsi_sigma}, "
-                   f"history size={position_history_size}, "
-                   f"max interpolation frames={interpolation_max_frames}")

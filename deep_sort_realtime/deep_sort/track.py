@@ -1,8 +1,5 @@
 # vim: expandtab:ts=4:sw=4
-import logging
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 class TrackState:
     """
@@ -261,13 +258,6 @@ class Track:
         self.features.append(detection.feature)
         self.persistent_features.append(detection.feature)  # Add to persistent features
         
-        # Log track update with detection information
-        logger.info(
-            f"Track {self.track_id} updated: confidence={detection.confidence:.3f}, "
-            f"class={detection.class_name}, position={self.original_ltwh}, "
-            f"features_count={len(self.persistent_features)}"
-        )
-        
         # Limit the number of persistent features to prevent memory issues
         max_persistent_features = 1000  # Configurable maximum
         if len(self.persistent_features) > max_persistent_features:
@@ -292,22 +282,8 @@ class Track:
         
         if self.state == TrackState.Tentative:
             self.state = TrackState.Deleted
-            logger.info(
-                f"Track {self.track_id} deleted: Failed to confirm within initialization phase "
-                f"(hits={self.hits}, required={self._n_init})"
-            )
         elif self.time_since_update > self._max_age:
             self.state = TrackState.Deleted
-            logger.info(
-                f"Track {self.track_id} deleted: Exceeded maximum age "
-                f"(time_since_update={self.time_since_update}, max_age={self._max_age})"
-            )
-        else:
-            # Track is just missed but not deleted
-            logger.info(
-                f"Track {self.track_id} missed detection: age={self.age}, "
-                f"hits={self.hits}, time_since_update={self.time_since_update}"
-            )
 
     def is_tentative(self):
         """Returns True if this track is tentative (unconfirmed)."""
@@ -399,11 +375,6 @@ class GSITrack(Track):
             mean[1] = interpolated_position[1]  # y
             
             self.mean, self.covariance = mean, covariance
-            
-            logger.info(
-                f"Track {self.track_id} using GSI interpolation: frame {self.frame_idx}, "
-                f"frames since detection: {frames_since_detection}"
-            )
         else:
             # Use regular Kalman prediction
             self.is_interpolating = False
@@ -433,10 +404,6 @@ class GSITrack(Track):
         
         self.last_detection_frame = self.frame_idx
         self.is_interpolating = False
-        
-        logger.info(
-            f"Track {self.track_id} position history updated: {len(self.position_history)} points"
-        )
     
     def _gaussian_weight(self, distance, sigma):
         """

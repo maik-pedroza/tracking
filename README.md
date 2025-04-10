@@ -159,6 +159,16 @@ for track in tracks:
 
 [CLIP](https://github.com/openai/CLIP) is added as another option of embedder due to its proven flexibility and generalisability. Download the CLIP model weights you want at [deep_sort_realtime/embedder/weights/download_clip_wts.sh](deep_sort_realtime/embedder/weights/download_clip_wts.sh) and store the weights at that directory as well, or you can provide your own CLIP weights through `embedder_wts` argument of the `DeepSort` object.
 
+```python
+# Example using ViT-L/14 model for better feature representation
+from deep_sort_realtime.deepsort_tracker import DeepSort
+tracker = DeepSort(max_age=5, embedder='clip_ViT-L/14')
+bbs = object_detector.detect(frame) 
+tracks = tracker.update_tracks(bbs, frame=frame)
+```
+
+The ViT-L/14 model provides higher quality features (768-dim) compared to other CLIP models (1024-dim) and automatically uses enhanced resolution (384×384) for better performance on small objects and fine details.
+
 ### Tensorflow Embedder
 
 Available now at `deep_sort_realtime/embedder/embedder_tf.py`, as alternative to (the default) pytorch embedder. Tested on Tensorflow 2.3.1. You need to make your own code change to use it.
