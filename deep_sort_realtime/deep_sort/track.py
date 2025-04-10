@@ -258,8 +258,8 @@ class Track:
         self.features.append(detection.feature)
         self.persistent_features.append(detection.feature)  # Add to persistent features
         
-        # Limit the number of persistent features to prevent memory issues
-        max_persistent_features = 1000  # Configurable maximum
+        # Limit the number of persistent features but keep more for better appearance matching
+        max_persistent_features = 2000  # Increased from 1000 for better appearance history
         if len(self.persistent_features) > max_persistent_features:
             # Keep the most recent features
             self.persistent_features = self.persistent_features[-max_persistent_features:]

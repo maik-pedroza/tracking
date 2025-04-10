@@ -130,12 +130,8 @@ class DeepSort(object):
 
                 model_name = "_".join(embedder.split("_")[1:])
                 
-                # Configuración especial para ViT-L/14
-                custom_resolution = None
-                if model_name == "ViT-L/14":
-                    # Usar resolución más alta para vehículos (384x384)
-                    custom_resolution = 384
-                    print(f"Using enhanced resolution {custom_resolution}x{custom_resolution} for {model_name}")
+                # Enhanced resolution for all CLIP models to better capture color and visual details
+                custom_resolution = 384 if model_name == "ViT-L/14" else 256
                 
                 self.embedder = Embedder(
                     model_name=model_name,

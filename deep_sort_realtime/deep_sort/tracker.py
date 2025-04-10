@@ -61,6 +61,7 @@ class Tracker:
         self.tracks = []
         self.del_tracks_ids = []
         self._next_id = 1
+        self._used_ids = set()  # Track all IDs that have been used
         if override_track_class:
             self.track_class = override_track_class
         else:
@@ -91,6 +92,7 @@ class Tracker:
             if today != self.today:
                 self.today = today
                 self._next_id = 1
+                self._used_ids = set()  # Reset used IDs for a new day
 
         # Run matching cascade.
         matches, unmatched_tracks, unmatched_detections = self._match(detections)
@@ -186,10 +188,17 @@ class Tracker:
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
 
+        # Find a unique ID that hasn't been used
+        while str(self._next_id) in self._used_ids:
+            self._next_id += 1
+            
         if self.today:
             track_id = "{}_{}".format(self.today, self._next_id)
         else:
             track_id = "{}".format(self._next_id)
+        
+        # Record this ID as used
+        self._used_ids.add(str(self._next_id))
         
         self.tracks.append(
             self.track_class(
@@ -211,4 +220,5 @@ class Tracker:
 
     def delete_all_tracks(self):
         self.tracks = []
-        self._next_id = 1
+        # We do not reset _used_ids to maintain unique IDs
+        self._next_id = max(self._used_ids) + 1 if self._used_ids else 1
