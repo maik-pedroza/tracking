@@ -38,8 +38,6 @@ class Tracker:
         The list of active tracks at the current time step.
     gating_only_position : Optional[bool]
         Used during gating, comparing KF predicted and measured states. If True, only the x, y position of the state distribution is considered during gating. Defaults to False, where x,y, aspect ratio and height will be considered.
-    appearance_weight : Optional[float]
-        Weight factor to increase the importance of appearance features during tracking.
     """
 
     def __init__(
@@ -51,7 +49,6 @@ class Tracker:
         override_track_class=None,
         today=None,
         gating_only_position=False,
-        appearance_weight=1.0,
     ):
         self.today = today
         self.metric = metric
@@ -59,7 +56,6 @@ class Tracker:
         self.max_age = max_age
         self.n_init = n_init
         self.gating_only_position = gating_only_position
-        self.appearance_weight = appearance_weight
 
         self.kf = kalman_filter.KalmanFilter()
         self.tracks = []
@@ -140,9 +136,7 @@ class Tracker:
             targets = np.array([tracks[i].track_id for i in track_indices])
             cost_matrix = self.metric.distance(features, targets)
             cost_matrix = linear_assignment.gate_cost_matrix(
-                self.kf, cost_matrix, tracks, dets, track_indices, detection_indices, 
-                only_position=self.gating_only_position,
-                appearance_weight=self.appearance_weight
+                self.kf, cost_matrix, tracks, dets, track_indices, detection_indices, only_position=self.gating_only_position
             )
 
             return cost_matrix

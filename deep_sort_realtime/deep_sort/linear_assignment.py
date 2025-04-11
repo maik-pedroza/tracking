@@ -166,7 +166,6 @@ def gate_cost_matrix(
     detection_indices,
     gated_cost=INFTY_COST,
     only_position=False,
-    appearance_weight=1.5,
 ):
     """Invalidate infeasible entries in cost matrix based on the state
     distributions obtained by Kalman filtering.
@@ -195,9 +194,6 @@ def gate_cost_matrix(
     only_position : Optional[bool]
         If True, only the x, y position of the state distribution is considered
         during gating. Defaults to False.
-    appearance_weight : Optional[float]
-        Weight factor to increase the importance of appearance features. Higher values
-        give more importance to appearance similarity over spatial proximity.
 
     Returns
     -------
@@ -206,16 +202,12 @@ def gate_cost_matrix(
 
     """
     gating_dim = 2 if only_position else 4
-    gating_threshold = kalman_filter.chi2inv95[gating_dim] * (1.0 + 0.5 * (appearance_weight - 1.0))
+    gating_threshold = kalman_filter.chi2inv95[gating_dim]
     measurements = np.asarray([detections[i].to_xyah() for i in detection_indices])
-    
-    weighted_cost_matrix = cost_matrix / appearance_weight
-    
     for row, track_idx in enumerate(track_indices):
         track = tracks[track_idx]
         gating_distance = kf.gating_distance(
             track.mean, track.covariance, measurements, only_position
         )
-        weighted_cost_matrix[row, gating_distance > gating_threshold] = gated_cost
-    
-    return weighted_cost_matrix
+        cost_matrix[row, gating_distance > gating_threshold] = gated_cost
+    return cost_matrix
