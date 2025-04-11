@@ -179,6 +179,7 @@ class Tracker:
             detections,
             iou_track_candidates,
             unmatched_detections,
+            direction_penalty=True
         )
 
         matches = matches_a + matches_b
@@ -188,9 +189,6 @@ class Tracker:
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
 
-        # Find a unique ID that hasn't been used
-        while str(self._next_id) in self._used_ids:
-            self._next_id += 1
             
         if self.today:
             track_id = "{}_{}".format(self.today, self._next_id)
@@ -216,9 +214,8 @@ class Tracker:
                 others=detection.others,
             )
         )
+
         self._next_id += 1
 
     def delete_all_tracks(self):
         self.tracks = []
-        # We do not reset _used_ids to maintain unique IDs
-        self._next_id = max(self._used_ids) + 1 if self._used_ids else 1
