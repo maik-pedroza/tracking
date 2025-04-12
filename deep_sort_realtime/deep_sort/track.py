@@ -73,6 +73,9 @@ class Track:
     persistent_features : List[ndarray]
         A persistent cache of features that is not cleared during tracker update.
         This helps improve reidentification by maintaining multiple views of the tracked object.
+    cosine_similarity : float
+        The cosine similarity value of the last match with a detection.
+
     """
 
     def __init__(
@@ -100,6 +103,7 @@ class Track:
         self.features = []
         self.persistent_features = []  # Persistent features that don't get cleared
         self.latest_feature = None
+        self.cosine_similarity = None  # Store the cosine similarity from matching
         if feature is not None:
             self.features.append(feature)
             self.persistent_features.append(feature)  # Also add to persistent features
@@ -114,11 +118,6 @@ class Track:
         self.det_conf = det_conf
         self.instance_mask = instance_mask
         self.others = others
-        
-        # Track movement history and trajectory
-        self.position_history = []  # Lista de posiciones (x, y)
-        self.velocity_history = []  # Lista de vectores de velocidad (dx, dy)
-        self.max_history_length = 30  # Máxima longitud del historial a mantener
 
     def to_tlwh(self, orig=False, orig_strict=False):
         """Get current position in bounding box format `(top left x, top left y,
@@ -225,6 +224,13 @@ class Track:
         '''
         return self.latest_feature
 
+    def get_cosine_similarity(self):
+        """
+        Get the cosine similarity of the last match.
+        Will be None if no match was found in the last update.
+        """
+        return self.cosine_similarity
+
     def predict(self, kf):
         """Propagate the state distribution to the current time step using a
         Kalman filter prediction step.
@@ -235,38 +241,16 @@ class Track:
             The Kalman filter.
 
         """
-        # Guardar posición actual antes de la predicción
-        if len(self.position_history) > 0:
-            last_pos = np.array([self.mean[0], self.mean[1]])  # x, y
-        
         self.mean, self.covariance = kf.predict(self.mean, self.covariance)
-        
-        # Guardar nueva posición tras la predicción
-        current_pos = np.array([self.mean[0], self.mean[1]])
-        self.position_history.append(current_pos)
-        
-        # Limitar tamaño del historial
-        if len(self.position_history) > self.max_history_length:
-            self.position_history.pop(0)
-        
-        # Calcular velocidad si tenemos al menos dos posiciones
-        if len(self.position_history) >= 2:
-            prev_pos = self.position_history[-2]
-            velocity = current_pos - prev_pos
-            self.velocity_history.append(velocity)
-            
-            # Limitar tamaño del historial de velocidad
-            if len(self.velocity_history) > self.max_history_length:
-                self.velocity_history.pop(0)
-        
         self.age += 1
         self.time_since_update += 1
         self.original_ltwh = None
         self.det_conf = None
         self.instance_mask = None
         self.others = None
+        self.cosine_similarity = None  # Reset similarity when no match
 
-    def update(self, kf, detection):
+    def update(self, kf, detection, similarity=None):
         """Perform Kalman filter measurement update step and update the feature
         cache.
 
@@ -276,37 +260,20 @@ class Track:
             The Kalman filter.
         detection : Detection
             The associated detection.
+        similarity : Optional[float]
+            The cosine similarity value of the match with this detection.
 
         """
-        # Guardar posición actual antes de la actualización
-        if len(self.position_history) > 0:
-            last_pos = np.array([self.mean[0], self.mean[1]])  # x, y
-        
         self.original_ltwh = detection.get_ltwh()
         self.mean, self.covariance = kf.update(
             self.mean, self.covariance, detection.to_xyah()
         )
-        
-        # Guardar nueva posición tras la actualización
-        current_pos = np.array([self.mean[0], self.mean[1]])
-        self.position_history.append(current_pos)
-        
-        # Limitar tamaño del historial
-        if len(self.position_history) > self.max_history_length:
-            self.position_history.pop(0)
-        
-        # Calcular velocidad si tenemos al menos dos posiciones
-        if len(self.position_history) >= 2:
-            prev_pos = self.position_history[-2]
-            velocity = current_pos - prev_pos
-            self.velocity_history.append(velocity)
-            
-            # Limitar tamaño del historial de velocidad
-            if len(self.velocity_history) > self.max_history_length:
-                self.velocity_history.pop(0)
-        
         self.features.append(detection.feature)
         self.persistent_features.append(detection.feature)  # Add to persistent features
+        
+        # Store the cosine similarity if provided
+        if similarity is not None:
+            self.cosine_similarity = similarity
         
         # Limit the number of persistent features but keep more for better appearance matching
         max_persistent_features = 2000  # Increased from 1000 for better appearance history
@@ -325,48 +292,6 @@ class Track:
         self.time_since_update = 0
         if self.state == TrackState.Tentative and self.hits >= self._n_init:
             self.state = TrackState.Confirmed
-            
-    def get_average_velocity(self, num_samples=10):
-        """
-        Calcula la velocidad promedio de las últimas muestras disponibles
-        
-        Parameters
-        ----------
-        num_samples : int
-            Número de muestras recientes a considerar
-            
-        Returns
-        -------
-        ndarray or None
-            Vector de velocidad promedio [dx, dy] o None si no hay suficientes muestras
-        """
-        if len(self.velocity_history) < 3:  # Necesitamos al menos algunas muestras para estimar
-            return None
-            
-        # Usar las últimas muestras disponibles (o todas si hay menos que num_samples)
-        samples = min(num_samples, len(self.velocity_history))
-        recent_velocities = self.velocity_history[-samples:]
-        
-        # Calcular promedio
-        avg_velocity = np.mean(recent_velocities, axis=0)
-        return avg_velocity
-        
-    def get_movement_direction(self):
-        """
-        Calcula la dirección general del movimiento del objeto
-        
-        Returns
-        -------
-        float or None
-            Ángulo en radianes que representa la dirección o None si no hay suficientes datos
-        """
-        avg_velocity = self.get_average_velocity()
-        if avg_velocity is None or (avg_velocity[0] == 0 and avg_velocity[1] == 0):
-            return None
-            
-        # Calcular ángulo en radianes (0 es este, π/2 es norte, etc.)
-        direction = np.arctan2(avg_velocity[1], avg_velocity[0])
-        return direction
 
     def mark_missed(self):
         """Mark this track as missed (no association at the current time step)."""

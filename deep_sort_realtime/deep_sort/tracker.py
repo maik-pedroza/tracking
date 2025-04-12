@@ -95,11 +95,12 @@ class Tracker:
                 self._used_ids = set()  # Reset used IDs for a new day
 
         # Run matching cascade.
-        matches, unmatched_tracks, unmatched_detections = self._match(detections)
+        matches, unmatched_tracks, unmatched_detections, similarity_dict = self._match(detections)
 
         # Update track set.
         for track_idx, detection_idx in matches:
-            self.tracks[track_idx].update(self.kf, detections[detection_idx])
+            similarity = similarity_dict.get((track_idx, detection_idx), None)
+            self.tracks[track_idx].update(self.kf, detections[detection_idx], similarity=similarity)
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
         for detection_idx in unmatched_detections:
@@ -179,12 +180,27 @@ class Tracker:
             detections,
             iou_track_candidates,
             unmatched_detections,
-            direction_penalty=True
         )
 
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
-        return matches, unmatched_tracks, unmatched_detections
+        
+        # Store similarity values for each match
+        similarity_dict = {}
+        for track_idx, detection_idx in matches_a:
+            # Calculate cosine similarity for this match
+            track_feature = self.tracks[track_idx].latest_feature
+            detection_feature = detections[detection_idx].feature
+            
+            # Normalize features
+            if track_feature is not None and detection_feature is not None:
+                track_feature = track_feature / np.linalg.norm(track_feature)
+                detection_feature = detection_feature / np.linalg.norm(detection_feature)
+                # Cosine similarity is 1 - cosine distance, and cosine distance is what's used in the matcher
+                similarity = 1.0 - (1.0 - np.dot(track_feature, detection_feature))
+                similarity_dict[(track_idx, detection_idx)] = similarity
+        
+        return matches, unmatched_tracks, unmatched_detections, similarity_dict
 
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
