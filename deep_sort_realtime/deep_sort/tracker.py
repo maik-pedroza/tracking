@@ -137,23 +137,17 @@ class Tracker:
             targets = np.array([tracks[i].track_id for i in track_indices])
             cost_matrix = self.metric.distance(features, targets)
             cost_matrix = linear_assignment.gate_cost_matrix(
-                self.kf, cost_matrix, tracks, dets, track_indices, detection_indices, only_position=self.gating_only_position
+                self.kf, cost_matrix, tracks, dets, track_indices, detection_indices,
+                only_position=self.gating_only_position
             )
-
             return cost_matrix
 
-        # Split track set into confirmed and unconfirmed tracks.
+        # Separa los tracks confirmados y no confirmados.
         confirmed_tracks = [i for i, t in enumerate(self.tracks) if t.is_confirmed()]
-        unconfirmed_tracks = [
-            i for i, t in enumerate(self.tracks) if not t.is_confirmed()
-        ]
+        unconfirmed_tracks = [i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
 
-        # Associate confirmed tracks using appearance features.
-        (
-            matches_a,
-            unmatched_tracks_a,
-            unmatched_detections,
-        ) = linear_assignment.matching_cascade(
+        # Emparejamiento basado en apariencia.
+        matches_a, unmatched_tracks_a, unmatched_detections = linear_assignment.matching_cascade(
             gated_metric,
             self.metric.matching_threshold,
             self.max_age,
@@ -162,18 +156,14 @@ class Tracker:
             confirmed_tracks,
         )
 
-        # Associate remaining tracks together with unconfirmed tracks using IOU.
+        # Emparejamiento IOU para el resto.
         iou_track_candidates = unconfirmed_tracks + [
             k for k in unmatched_tracks_a if self.tracks[k].time_since_update == 1
         ]
         unmatched_tracks_a = [
             k for k in unmatched_tracks_a if self.tracks[k].time_since_update != 1
         ]
-        (
-            matches_b,
-            unmatched_tracks_b,
-            unmatched_detections,
-        ) = linear_assignment.min_cost_matching(
+        matches_b, unmatched_tracks_b, unmatched_detections = linear_assignment.min_cost_matching(
             iou_matching.iou_cost,
             self.max_iou_distance,
             self.tracks,
@@ -182,25 +172,39 @@ class Tracker:
             unmatched_detections,
         )
 
-        matches = matches_a + matches_b
-        unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
-        
-        # Store similarity values for each match
+        all_matches = matches_a + matches_b
+        unmatched_tracks = set(unmatched_tracks_a + unmatched_tracks_b)
+        unmatched_detections = set(unmatched_detections)
+
+        # Umbral de similitud: se requiere que la similitud coseno sea al menos:
+        similarity_threshold = 1.0 - self.metric.matching_threshold
+
         similarity_dict = {}
-        for track_idx, detection_idx in matches_a:
-            # Calculate cosine similarity for this match
+        valid_matches = []
+
+        for track_idx, detection_idx in all_matches:
             track_feature = self.tracks[track_idx].latest_feature
             detection_feature = detections[detection_idx].feature
+            if track_feature is None or detection_feature is None:
+                similarity = None
+            else:
+                norm_track = track_feature / np.linalg.norm(track_feature) if np.linalg.norm(track_feature) != 0 else track_feature
+                norm_detection = detection_feature / np.linalg.norm(detection_feature) if np.linalg.norm(detection_feature) != 0 else detection_feature
+                similarity = np.dot(norm_track, norm_detection)
             
-            # Normalize features
-            if track_feature is not None and detection_feature is not None:
-                track_feature = track_feature / np.linalg.norm(track_feature)
-                detection_feature = detection_feature / np.linalg.norm(detection_feature)
-                # Cosine similarity is 1 - cosine distance, and cosine distance is what's used in the matcher
-                similarity = 1.0 - (1.0 - np.dot(track_feature, detection_feature))
+            # Solo aceptamos el emparejamiento si hay similitud válida y es suficiente.
+            if similarity is not None and similarity >= similarity_threshold:
+                valid_matches.append((track_idx, detection_idx))
                 similarity_dict[(track_idx, detection_idx)] = similarity
-        
-        return matches, unmatched_tracks, unmatched_detections, similarity_dict
+                # Eliminamos aquellos emparejamientos aceptados de las listas "sin match".
+                unmatched_tracks.discard(track_idx)
+                unmatched_detections.discard(detection_idx)
+            else:
+                # Si no se cumple, se añaden ambos a los sin match.
+                unmatched_tracks.add(track_idx)
+                unmatched_detections.add(detection_idx)
+
+        return valid_matches, list(unmatched_tracks), list(unmatched_detections), similarity_dict
 
     def _initiate_track(self, detection):
         mean, covariance = self.kf.initiate(detection.to_xyah())
