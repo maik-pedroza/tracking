@@ -1,6 +1,27 @@
 # vim: expandtab:ts=4:sw=4
+from __future__ import absolute_import
 import numpy as np
 import scipy.linalg
+
+# ---------------------------------------------------------------------------
+# Constantes y utilidades globales
+# ---------------------------------------------------------------------------
+
+# Altura mínima efectiva (px) para el cálculo de ruido
+MIN_H = 5.0  # px
+
+# Desviación estándar mínima permitida en posición (px)
+MIN_STD_POS = 1.0  # px
+
+# ---------------------------------------------------------------------------
+# Función auxiliar para escalar desviaciones estándar con suelo
+# ---------------------------------------------------------------------------
+
+
+def _scale(std_weight: float, h: float) -> float:
+    """Escala *std_weight* por la altura garantizando límites mínimos."""
+    h_eff = max(h, MIN_H)
+    return max(std_weight * h_eff, MIN_STD_POS)
 
 
 """
@@ -39,13 +60,14 @@ class KalmanFilter(object):
     """
 
     def __init__(self):
-        ndim, dt = 4, 1.0
+        self.ndim = 4
 
-        # Create Kalman filter model matrices.
-        self._motion_mat = np.eye(2 * ndim, 2 * ndim)
-        for i in range(ndim):
-            self._motion_mat[i, ndim + i] = dt
-        self._update_mat = np.eye(ndim, 2 * ndim)
+        # Create base matrices (dt=1). Se ajustarán dinámicamente en predict.
+        self._motion_mat_base = np.eye(2 * self.ndim, 2 * self.ndim)
+        for i in range(self.ndim):
+            self._motion_mat_base[i, self.ndim + i] = 1.0
+
+        self._update_mat = np.eye(self.ndim, 2 * self.ndim)
 
         # Motion and observation uncertainty are chosen relative to the current
         # state estimate. These weights control the amount of uncertainty in
@@ -74,20 +96,21 @@ class KalmanFilter(object):
         mean_vel = np.zeros_like(mean_pos)
         mean = np.r_[mean_pos, mean_vel]
 
+        h = measurement[3]
         std = [
-            2 * self._std_weight_position * measurement[3],
-            2 * self._std_weight_position * measurement[3],
+            2 * _scale(self._std_weight_position, h),
+            2 * _scale(self._std_weight_position, h),
             1e-2,
-            2 * self._std_weight_position * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
+            2 * _scale(self._std_weight_position, h),
+            10 * _scale(self._std_weight_velocity, h),
+            10 * _scale(self._std_weight_velocity, h),
             1e-5,
-            10 * self._std_weight_velocity * measurement[3],
+            10 * _scale(self._std_weight_velocity, h),
         ]
         covariance = np.diag(np.square(std))
         return mean, covariance
 
-    def predict(self, mean, covariance):
+    def predict(self, mean, covariance, dt: float = 1.0):
         """Run Kalman filter prediction step.
 
         Parameters
@@ -106,23 +129,29 @@ class KalmanFilter(object):
             state. Unobserved velocities are initialized to 0 mean.
 
         """
+        h = mean[3]
         std_pos = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
+            _scale(self._std_weight_position, h),
+            _scale(self._std_weight_position, h),
             1e-2,
-            self._std_weight_position * mean[3],
+            _scale(self._std_weight_position, h),
         ]
         std_vel = [
-            self._std_weight_velocity * mean[3],
-            self._std_weight_velocity * mean[3],
+            _scale(self._std_weight_velocity, h),
+            _scale(self._std_weight_velocity, h),
             1e-5,
-            self._std_weight_velocity * mean[3],
+            _scale(self._std_weight_velocity, h),
         ]
         motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
 
-        mean = np.dot(self._motion_mat, mean)
+        # Construir matriz de transición con dt actual
+        motion_mat = self._motion_mat_base.copy()
+        for i in range(self.ndim):
+            motion_mat[i, self.ndim + i] = dt
+
+        mean = motion_mat @ mean
         covariance = (
-            np.linalg.multi_dot((self._motion_mat, covariance, self._motion_mat.T))
+            motion_mat @ covariance @ motion_mat.T
             + motion_cov
         )
 
@@ -145,11 +174,12 @@ class KalmanFilter(object):
             estimate.
 
         """
+        h = mean[3]
         std = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-1,
-            self._std_weight_position * mean[3],
+            _scale(self._std_weight_position, h),
+            _scale(self._std_weight_position, h),
+            1e-2,  # Unificado con predict para consistencia
+            _scale(self._std_weight_position, h),
         ]
         innovation_cov = np.diag(np.square(std))
 
@@ -186,15 +216,17 @@ class KalmanFilter(object):
         )
         kalman_gain = scipy.linalg.cho_solve(
             (chol_factor, lower),
-            np.dot(covariance, self._update_mat.T).T,
+            (covariance @ self._update_mat.T).T,
             check_finite=False,
         ).T
         innovation = measurement - projected_mean
 
-        new_mean = mean + np.dot(innovation, kalman_gain.T)
-        new_covariance = covariance - np.linalg.multi_dot(
-            (kalman_gain, projected_cov, kalman_gain.T)
-        )
+        new_mean = mean + kalman_gain @ innovation
+
+        # Forma Joseph para garantizar P S.D.P.
+        I_KH = np.eye(covariance.shape[0]) - kalman_gain @ self._update_mat
+        new_covariance = I_KH @ covariance @ I_KH.T + kalman_gain @ projected_cov @ kalman_gain.T
+
         return new_mean, new_covariance
 
     def gating_distance(self, mean, covariance, measurements, only_position=False):

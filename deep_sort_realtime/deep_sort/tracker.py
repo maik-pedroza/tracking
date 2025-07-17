@@ -6,6 +6,7 @@ from . import kalman_filter
 from . import linear_assignment
 from . import iou_matching
 from .track import Track
+from .imm_track import IMMTrack
 
 class Tracker:
     """
@@ -62,10 +63,10 @@ class Tracker:
         self.del_tracks_ids = []
         self._next_id = 1
         self._used_ids = set()  # Track all IDs that have been used
-        if override_track_class:
+        if override_track_class is not None:
             self.track_class = override_track_class
         else:
-            self.track_class = Track
+            self.track_class = IMMTrack
 
     def predict(self):
         """Propagate track state distributions one time step forward.
